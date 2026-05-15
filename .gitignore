@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local IDE / notebook noise
+.idea/
+.vscode/
+.ipynb_checkpoints/
+.tmp_gapstat/
+
+# Runtime logs and scratch files
+*.log
+run_out.txt
+stdout.txt
+stderr.txt
+_*.txt
+_*.py
+teat.py
+catboost_info/
+
+# Data files: keep Kaggle data local
+data/raw/
+data/processed/
+data/pseudo/
+*.pkl
+*.npy
+
+# Generated submissions at repo root
+submission*.csv
+
+# Large generated reports
+*.pdf
+
+# Results: ignore generated bulk by default, keep compact report assets
+results/*
+!results/eda_viz/
+!results/eda_viz/*.png
+!results/model_report/
+!results/model_report/*.png
+!results/metrics/
+!results/metrics/**/*.txt
+!results/params/
+!results/params/*.txt
+
+# CatBoost training outputs
+catboost_info/
+results/logs/

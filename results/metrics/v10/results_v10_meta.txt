@@ -1,0 +1,5 @@
+OOF Meta Accuracy: 0.810077
+Meta Threshold: 0.535000
+Meta C: 0.2
+Meta Rank: True
+Features: ['lgb_s42', 'mlp_dl']

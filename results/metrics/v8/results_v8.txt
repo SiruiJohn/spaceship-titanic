@@ -1,0 +1,14 @@
+OOF Meta Accuracy: 0.815714
+Meta Threshold: 0.535000
+Seeds: [42, 202]
+Base Folds: 5
+Meta Folds: 5
+Features: ['lgb_s42', 'lgb_s202', 'cat_s42', 'cat_s202', 'xgb_s42', 'xgb_s202', 'mlp_dl']
+Meta Coef: [0.1457891238395182, 0.7502949877934048, 1.3907459742847967, 1.6387836059010827, 0.08034379474025029, 0.05725088513087297, 2.040160143822399]
+cat_s202 OOF Accuracy@0.5: 0.815829
+cat_s42 OOF Accuracy@0.5: 0.814218
+lgb_s202 OOF Accuracy@0.5: 0.807201
+lgb_s42 OOF Accuracy@0.5: 0.806051
+mlp_dl OOF Accuracy@0.5: 0.806626
+xgb_s202 OOF Accuracy@0.5: 0.812033
+xgb_s42 OOF Accuracy@0.5: 0.810192
