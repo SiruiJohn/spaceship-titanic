@@ -30,8 +30,9 @@ data/pseudo/
 *.pkl
 *.npy
 
-# Generated submissions at repo root
+# Submission files (generated)
 submission*.csv
+!submission_90plus.csv
 
 # Large generated reports
 *.pdf

@@ -1,5 +1,0 @@
-OOF Meta Accuracy: 0.840577
-Meta Threshold: 0.550000
-Meta C: 1.0
-Meta Rank: False
-Features: ['lgb_s42', 'lgb_s202', 'lgb_s555', 'cat_s42', 'cat_s202', 'cat_s555', 'xgb_s42', 'xgb_s202', 'xgb_s555']

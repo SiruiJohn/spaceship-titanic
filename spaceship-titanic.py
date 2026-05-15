@@ -84,6 +84,7 @@ def save_table_artifact(name, obj):
     global _table_counter
     _table_counter += 1
     base_name = f"{_table_counter:03d}_{_slugify(name, 'table')}"
+    TABLE_DIR.mkdir(parents=True, exist_ok=True)
     if isinstance(obj, pd.DataFrame):
         obj.to_csv(TABLE_DIR / f"{base_name}.csv", index=True)
         obj.to_html(TABLE_DIR / f"{base_name}.html", index=True)
@@ -103,6 +104,7 @@ def save_figure_artifact(fig):
     _figure_counter += 1
     figure_name = _guess_figure_name(fig)
     base_name = f"{_figure_counter:03d}_{_slugify(figure_name, 'figure')}"
+    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURE_DIR / f"{base_name}.png", dpi=300, bbox_inches="tight")
 
 def finalize_figures():
@@ -911,7 +913,7 @@ def run_ensemble_cv(
                 a = accuracy_score(yvl, vp >= 0.5)
                 fold_rows.append({'seed':seed,'fold':fi,'model':'lgb','acc':a})
                 accs.append(f'LGB={a:.4f}')
-
+                
             if CAT_AVAILABLE:
                 cat_m = CatBoostClassifier(
                     iterations=500, depth=7,
