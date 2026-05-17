@@ -29,6 +29,16 @@ if __name__ == '__main__' and CAT_AVAILABLE:
     X_raw = data['X_train_raw']
     X_te_raw = data['X_test_raw']
     y = data['y']
+
+    if 'feature_subsets' in data and data['feature_subsets']:
+        cols = data['feature_subsets'].get('cat')
+        if cols is not None:
+            X_num = X_num[cols]
+            X_te_num = X_te_num[cols]
+            X_raw = X_raw[cols]
+            X_te_raw = X_te_raw[cols]
+            data['CATEGORICAL_COLS'] = [c for c in data['CATEGORICAL_COLS'] if c in cols]
+
     cat_indices = [X_raw.columns.get_loc(c) for c in data['CATEGORICAL_COLS'] if c in X_raw.columns]
 
     oof_probs = np.zeros(len(y))

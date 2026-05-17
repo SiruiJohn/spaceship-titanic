@@ -10,7 +10,7 @@ MODELS = {
     'xgb':  {'script': 'train_xgb.py', 'desc': 'XGBoost (400 rounds)'},
     'lgb':  {'script': 'train_lgb.py', 'desc': 'LightGBM (Optuna tuned)'},
     'cat':  {'script': 'train_cat.py', 'desc': 'CatBoost (500 iter)'},
-    'nn':   {'script': 'train_nn.py',  'desc': 'MLP Neural Network (256-128-64)'},
+    'nn':   {'script': 'train_nn.py',  'desc': 'MLP (256-128-64) | group+MixUp'},
 }
 
 DEFAULT_MODELS = ['et', 'hgb', 'xgb', 'lgb', 'cat', 'nn']

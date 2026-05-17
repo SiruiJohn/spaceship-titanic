@@ -46,16 +46,21 @@ class CFG:
 
     random_seeds    = [42, 2024, 7, 2025, 88]
     n_splits        = 5
-    pseudo_threshold = 0.92
-    pseudo_rounds   = 2
 
     optuna_trials   = 200
     optuna_cv_folds = 3
 
-    ensemble_runs       = 3
+    ensemble_runs       = 1
     ensemble_base_seeds = [42, 123, 888]
 
     submission_file    = 'submission_90plus.csv'
+    blend_models       = ['hist_gb', 'xgb', 'lgb']
+    shap_keep_percentile = 10
+    feature_sample_ratio = 1.0
+    mixup_alpha         = 0.4
+    mixup_multiplier    = 1
+    noise_std           = 0.01
+    group_swap_fraction = 0.0
     data_dir           = Path('data/raw')
     output_dir         = Path('modular_pipeline/output')
     processed_data_file  = output_dir / 'processed_data.pkl'

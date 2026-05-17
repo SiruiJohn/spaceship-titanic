@@ -267,6 +267,42 @@ def generate_locked_test_predictions(test_df):
     return locked
 
 
+def scan_dead_features_with_shap(X_train_num, X_test_num, y, feat_cols, percentile=10):
+    from sklearn.ensemble import ExtraTreesClassifier as _ET
+
+    print(f'[OK] Dead-feature scan (keep top {100-percentile}%) ...')
+
+    scanner = _ET(n_estimators=200, max_depth=10, min_samples_leaf=8,
+                  n_jobs=4, random_state=42)
+    scanner.fit(X_train_num, y)
+
+    importance = scanner.feature_importances_
+
+    feat_imp = pd.DataFrame({
+        'feature': feat_cols,
+        'importance': importance
+    }).sort_values('importance', ascending=True)
+
+    n_keep = max(10, len(feat_cols) - int(len(feat_cols) * percentile / 100))
+    dead_feats = feat_imp['feature'].head(len(feat_cols) - n_keep).tolist()
+    alive_feats = [f for f in feat_cols if f not in dead_feats]
+
+    print(f'   Features before scan: {len(feat_cols)}')
+    print(f'   Features after  scan: {len(alive_feats)}  (removing bottom {percentile}%)')
+    if dead_feats:
+        print(f'   Removed ({len(dead_feats)}): {", ".join(dead_feats)}')
+        print(f'   Bottom 5 importance:')
+        for _, row in feat_imp.head(5).iterrows():
+            print(f'     {row["feature"]:<30s} {row["importance"]:.6f}')
+    else:
+        print(f'   All features kept (n_keep={n_keep})')
+
+    dead_set = set(dead_feats)
+    X_train_out = X_train_num[[c for c in X_train_num.columns if c not in dead_set]]
+    X_test_out = X_test_num[[c for c in X_test_num.columns if c not in dead_set]]
+    return X_train_out, X_test_out, alive_feats
+
+
 if __name__ == '__main__':
     print('[OK] Loading data...')
     train_raw = pd.read_csv(CFG.data_dir / 'train.csv')
@@ -310,6 +346,21 @@ if __name__ == '__main__':
     X_train_num, X_test_num = encode_ordinal(X_train_raw, X_test_raw, CATEGORICAL_COLS)
     print(f'   X_train_num: {X_train_num.shape}, X_test_num: {X_test_num.shape}')
 
+    X_train_num, X_test_num, FEAT_COLS = scan_dead_features_with_shap(
+        X_train_num, X_test_num, y, FEAT_COLS, percentile=CFG.shap_keep_percentile
+    )
+
+    feature_subsets = {}
+    if CFG.feature_sample_ratio < 1.0:
+        print(f'[OK] Generating per-model feature subsets (ratio={CFG.feature_sample_ratio}) ...')
+        rng = np.random.RandomState(42)
+        for model in CFG.blend_models:
+            n_keep = max(10, int(len(FEAT_COLS) * CFG.feature_sample_ratio))
+            subset = sorted(rng.choice(FEAT_COLS, size=n_keep, replace=False).tolist())
+            feature_subsets[model] = subset
+            print(f'   {model:<15s} {len(subset):2d} features')
+        print(f'   Shared features across all: {len(set.intersection(*[set(v) for v in feature_subsets.values()]))}')
+
     print(f'[OK] Saving processed data to {CFG.processed_data_file}...')
     processed = {
         'X_train_num': X_train_num,
@@ -323,6 +374,7 @@ if __name__ == '__main__':
         'test_feat': test_feat,
         'locked_test_preds': locked_test_preds,
         'sample_submission': sample_submission,
+        'feature_subsets': feature_subsets,
     }
     with open(CFG.processed_data_file, 'wb') as f:
         pickle.dump(processed, f)

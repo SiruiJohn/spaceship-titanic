@@ -29,28 +29,26 @@ def optimize_threshold(y_true, probs):
     return best_t, best_s
 
 
-def apply_group_consistency(test_probs, test_feat, locked_mask=None, group_confidence=0.65):
+def apply_group_consistency(test_probs, test_feat, locked_mask=None, group_confidence=0.75):
     result = test_probs.copy()
     group_ids = test_feat['GroupId'].values
-    group_sizes = test_feat['GroupSize'].values
     unique_groups = np.unique(group_ids)
-
     n_adjusted = 0
 
     for gid in unique_groups:
         mask = group_ids == gid
         n_members = mask.sum()
-        if n_members <= 1:
+        if n_members <= 2:
             continue
 
         g_probs = test_probs[mask]
         g_mean = g_probs.mean()
 
         if g_mean > group_confidence:
-            result[mask] = np.clip(g_probs * 0.4 + 0.6, 0.5, 1.0)
+            result[mask] = np.clip(g_probs * 0.7 + 0.3, 0.5, 1.0)
             n_adjusted += n_members
         elif g_mean < 1 - group_confidence:
-            result[mask] = np.clip(g_probs * 0.4, 0.0, 0.5)
+            result[mask] = np.clip(g_probs * 0.7, 0.0, 0.5)
             n_adjusted += n_members
 
     if locked_mask is not None and locked_mask.any():
@@ -77,7 +75,7 @@ def load_model_outputs():
     model_outputs = {}
     available = []
 
-    for name in ['extra_trees', 'hist_gb', 'xgb', 'lgb', 'cat', 'nn']:
+    for name in CFG.blend_models:
         oof_file = CFG.output_dir / f'oof_{name}.npy'
         test_file = CFG.output_dir / f'test_{name}.npy'
         if oof_file.exists() and test_file.exists():
@@ -87,43 +85,10 @@ def load_model_outputs():
             }
             available.append(name)
             print(f'   Loaded {name} model outputs')
+        else:
+            print(f'   Missing {name} -- skipping')
 
     return data, model_outputs, available
-
-
-def ensemble_stage1_bootstrap(model_outputs, model_names, y_true, seed):
-    oof_mat = np.column_stack([model_outputs[n]['oof'] for n in model_names])
-    test_mat = np.column_stack([model_outputs[n]['test'] for n in model_names])
-
-    rng = np.random.RandomState(seed)
-    n = len(y_true)
-    bootstrap_idx = rng.choice(n, size=n, replace=True)
-    bootstrap_oof = oof_mat[bootstrap_idx]
-    bootstrap_y = y_true.iloc[bootstrap_idx]
-
-    meta = LogisticRegression(C=0.5, max_iter=3000)
-    meta.fit(bootstrap_oof, bootstrap_y)
-    oof_stack = meta.predict_proba(oof_mat)[:, 1]
-    test_stack = meta.predict_proba(test_mat)[:, 1]
-
-    simple_oof = oof_mat.mean(axis=1)
-    simple_test = test_mat.mean(axis=1)
-
-    best_w, best_cv = 0.5, -1.0
-    best_oof = simple_oof
-    best_test = simple_test
-
-    for w in np.linspace(0.2, 0.8, 25):
-        cand = w * oof_stack + (1 - w) * simple_oof
-        t, s = optimize_threshold(y_true, cand)
-        if s > best_cv:
-            best_cv = s
-            best_w = float(w)
-            best_oof = cand
-            best_test = w * test_stack + (1 - w) * simple_test
-            best_t = float(t)
-
-    return best_oof, best_test, best_t, best_cv, best_w
 
 
 def blend_and_submit():
@@ -143,103 +108,106 @@ def blend_and_submit():
 
     locked_mask = locked_test_preds.notna().values
     n_locked = locked_mask.sum()
-    print(f'[INFO] Hard-rule locked (CryoSleep+NoSpend): {n_locked} / {len(test_feat)}')
+    n_original = len(y)
+    print(f'[INFO] Hard-rule locked: {n_locked} / {len(test_feat)}')
 
-    all_run_test_probs = []
-    all_run_oof_probs = []
-    all_run_labels = []
+    oof_mat = np.column_stack([model_outputs[n]['oof'] for n in model_names])
+    test_mat = np.column_stack([model_outputs[n]['test'] for n in model_names])
 
-    for run_idx in range(CFG.ensemble_runs):
-        base_seed = CFG.ensemble_base_seeds[run_idx]
-        print(f'\n{"="*50}')
-        print(f'  ENSEMBLE RUN {run_idx+1}/{CFG.ensemble_runs}  (base_seed={base_seed})')
-        print(f'{"="*50}')
+    meta = LogisticRegression(C=0.5, max_iter=3000)
+    meta.fit(oof_mat, y)
+    oof_stack = meta.predict_proba(oof_mat)[:, 1]
+    test_stack = meta.predict_proba(test_mat)[:, 1]
 
-        oof_probs, test_probs, threshold, cv_acc, stack_w = ensemble_stage1_bootstrap(
-            model_outputs, model_names, y, seed=base_seed
-        )
-        print(f'  Stage1 CV acc: {cv_acc:.5f}  |  threshold: {threshold:.4f}  |  stack_w: {stack_w:.4f}')
+    simple_oof = oof_mat.mean(axis=1)
+    simple_test = test_mat.mean(axis=1)
 
-        current_oof = oof_probs
-        current_test = test_probs
-        current_acc = cv_acc
+    best_w, best_cv = 0.5, -1.0
+    best_oof = simple_oof
+    best_test = simple_test
 
-        aug_X_num = X_train_num.copy()
-        aug_y = y.copy()
-        n_original = len(y)
+    for w in np.linspace(0.2, 0.8, 25):
+        cand = w * oof_stack + (1 - w) * simple_oof
+        t, s = optimize_threshold(y, cand)
+        if s > best_cv:
+            best_cv = s
+            best_w = float(w)
+            best_oof = cand
+            best_test = w * test_stack + (1 - w) * simple_test
 
-        for pseudo_round in range(1, CFG.pseudo_rounds + 1):
-            high_mask = (current_test >= CFG.pseudo_threshold) | \
-                        (current_test <= 1 - CFG.pseudo_threshold)
-            if locked_mask.any():
-                high_mask[locked_mask] = False
+    best_threshold, best_cv = optimize_threshold(y, best_oof)
+    print(f'\n[OK] Ensemble stage 1 (LR stacking).')
+    print(f'   Models: {model_names}')
+    print(f'   Stack weight: {best_w:.4f}')
+    print(f'   OOF CV accuracy: {best_cv:.5f}')
 
-            n_pseudo = high_mask.sum()
-            if n_pseudo < 100:
-                print(f'  Pseudo round {pseudo_round}: only {n_pseudo} confident samples, stopping.')
-                break
+    final_oof = best_oof
+    final_test = best_test
 
-            pseudo_labels = (current_test[high_mask] >= 0.5).astype(int)
-            pseudo_X = X_test_num.iloc[high_mask].reset_index(drop=True)
+    scaler = StandardScaler()
+    X_sc = scaler.fit_transform(X_train_num.values)
+    X_te_sc = scaler.transform(X_test_num.values)
 
-            aug_X = pd.concat([aug_X_num, pseudo_X], ignore_index=True)
-            aug_y_full = pd.concat([aug_y, pd.Series(pseudo_labels)], ignore_index=True)
+    mlp_oof = np.zeros(n_original)
+    mlp_count = np.zeros(n_original)
+    mlp_test_parts = []
 
-            aug_oofs = {}
-            aug_tests = {}
-            for name in model_names:
-                clf = LogisticRegression(C=0.3, max_iter=2000)
-                orig_oof = model_outputs[name]['oof']
-                orig_test = model_outputs[name]['test']
-                clf.fit(orig_oof.reshape(-1, 1), y.values)
-                pseudo_pseudo_train = clf.predict_proba(
-                    model_outputs[name]['test'][high_mask].reshape(-1, 1)
-                )[:, 1]
-
-                aug_oofs[name] = np.concatenate([orig_oof, pseudo_pseudo_train])
-                aug_tests[name] = orig_test
-
-            augmented_outputs = {
-                n: {'oof': aug_oofs[n], 'test': aug_tests[n]}
-                for n in model_names
-            }
-
-            new_oof, new_test, new_t, new_acc, new_w = ensemble_stage1_bootstrap(
-                augmented_outputs, model_names, aug_y_full, seed=base_seed + pseudo_round * 100
+    mlp_seeds = CFG.random_seeds[:3]
+    for seed in mlp_seeds:
+        cv = StratifiedKFold(n_splits=CFG.n_splits, shuffle=True, random_state=seed)
+        for fi, (tr_idx, val_idx) in enumerate(cv.split(X_sc, y), 1):
+            mlp = MLPClassifier(
+                hidden_layer_sizes=(128, 64),
+                activation='relu', alpha=0.005,
+                learning_rate_init=1e-3, max_iter=300,
+                early_stopping=True, validation_fraction=0.1,
+                random_state=seed * 10 + fi, batch_size=256,
             )
+            mlp.fit(X_sc[tr_idx], y.iloc[tr_idx])
+            mlp_oof[val_idx] += mlp.predict_proba(X_sc[val_idx])[:, 1]
+            mlp_count[val_idx] += 1
+            mlp_test_parts.append(mlp.predict_proba(X_te_sc)[:, 1])
 
-            oof_orig_only = new_oof[:n_original]
-            orig_t, orig_acc = optimize_threshold(y, oof_orig_only)
+    mlp_oof /= np.maximum(mlp_count, 1)
+    mlp_test = np.mean(mlp_test_parts, axis=0)
+    mlp_cv_acc = accuracy_score(y, mlp_oof >= 0.5)
+    print(f'\n[OK] MLP blending OOF accuracy: {mlp_cv_acc:.5f}')
 
-            print(f'  Pseudo round {pseudo_round} | +{n_pseudo} samples | '
-                  f'reported acc: {new_acc:.5f} | true acc (orig only): {orig_acc:.5f}')
+    best_final_acc = best_cv
+    best_final_oof = final_oof
+    best_final_test = final_test
+    best_final_label = 'GBDT ensemble'
 
-            if orig_acc > current_acc:
-                print(f'  [OK] Real improvement ({current_acc:.5f} -> {orig_acc:.5f}), keeping.')
-                current_oof = oof_orig_only
-                current_test = new_test
-                current_acc = orig_acc
-                aug_X_num = aug_X
-                aug_y = aug_y_full
-            else:
-                print(f'  [SKIP] No real improvement ({orig_acc:.5f} <= {current_acc:.5f}), reverting.')
-                break
+    oof_2 = np.column_stack([final_oof, mlp_oof])
+    test_2 = np.column_stack([final_test, mlp_test])
+    meta2 = LogisticRegression(C=0.3, max_iter=1000)
+    meta2.fit(oof_2, y)
+    lr_oof = meta2.predict_proba(oof_2)[:, 1]
+    lr_test = meta2.predict_proba(test_2)[:, 1]
+    _, lr_acc = optimize_threshold(y, lr_oof)
+    print(f'  LR meta-blend          : {lr_acc:.5f}  weights={meta2.coef_[0].round(3)}')
+    if lr_acc > best_final_acc:
+        best_final_acc, best_final_oof, best_final_test = lr_acc, lr_oof, lr_test
+        best_final_label = 'LR meta-blend (GBDT + MLP)'
 
-        all_run_oof_probs.append(current_oof)
-        all_run_test_probs.append(current_test)
-        all_run_labels.append(f'run{run_idx+1}_acc={current_acc:.5f}')
-        print(f'  Run {run_idx+1} final OOF acc: {current_acc:.5f}')
+    for mlp_w in [0.05, 0.10, 0.15, 0.20, 0.25, 0.30]:
+        w_oof = (1 - mlp_w) * final_oof + mlp_w * mlp_oof
+        w_test = (1 - mlp_w) * final_test + mlp_w * mlp_test
+        _, w_acc = optimize_threshold(y, w_oof)
+        if w_acc > best_final_acc:
+            best_final_acc, best_final_oof, best_final_test = w_acc, w_oof, w_test
+            best_final_label = f'Fixed blend mlp_w={mlp_w:.2f}'
 
-    final_oof = np.mean(all_run_oof_probs, axis=0)
-    final_test = np.mean(all_run_test_probs, axis=0)
-    final_threshold, final_cv_acc = optimize_threshold(y, final_oof)
+    _, gbdt_acc = optimize_threshold(y, final_oof)
+    if gbdt_acc >= best_final_acc:
+        best_final_acc, best_final_oof, best_final_test = gbdt_acc, final_oof, final_test
+        best_final_label = 'GBDT ensemble (MLP did not help)'
 
-    print(f'\n[OK] Multi-run ensemble ({CFG.ensemble_runs} runs) complete.')
-    print(f'   Per-run accs: {", ".join(all_run_labels)}')
-    print(f'   Averaged OOF acc: {final_cv_acc:.5f}')
+    final_threshold, final_cv_acc = optimize_threshold(y, best_final_oof)
+    print(f'\n[OK] Winner: {best_final_label}  |  OOF acc: {final_cv_acc:.5f}')
 
     pre_cal_acc = final_cv_acc
-    cal_oof, cal_test = calibrate_oof(final_oof, final_test, y)
+    cal_oof, cal_test = calibrate_oof(best_final_oof, best_final_test, y)
     cal_threshold, cal_acc = optimize_threshold(y, cal_oof)
 
     if cal_acc > pre_cal_acc:
@@ -248,36 +216,38 @@ def blend_and_submit():
         use_threshold = cal_threshold
     else:
         print(f'[SKIP] Calibration did NOT help ({cal_acc:.5f} <= {pre_cal_acc:.5f})')
-        use_probs = final_test
+        use_probs = best_final_test
         use_threshold = final_threshold
 
-    print(f'\n[OK] Applying group consistency post-processing...')
-    group_final, n_group_adjusted = apply_group_consistency(
-        use_probs, test_feat, locked_mask=locked_mask, group_confidence=0.65
-    )
-    final_preds = (group_final >= use_threshold).astype(float)
-
+    final_preds = (use_probs >= use_threshold).astype(float)
     for idx in locked_test_preds.dropna().index:
         final_preds[int(idx)] = locked_test_preds[idx]
-        group_final[int(idx)] = locked_test_preds[idx]
 
     submission = sample_submission.copy()
     submission[CFG.target] = final_preds.astype(bool)
-    submission.to_csv(CFG.submission_file, index=False)
+    submission.to_csv('submission_no_group.csv', index=False)
 
-    print(f'\n[OK] Submission created: {CFG.submission_file}')
-    print(f'   Positive rate: {final_preds.mean():.5f}')
-    print(f'   Hard-rule locked: {n_locked} / {len(final_preds)}')
-    print(f'   Group-adjusted: {n_group_adjusted}')
-    print(f'   Pre-calibration OOF acc: {pre_cal_acc:.5f}')
-    print(f'   Post-calibration OOF acc: {cal_acc:.5f}')
+    group_probs, n_group_adjusted = apply_group_consistency(
+        use_probs, test_feat, locked_mask=locked_mask, group_confidence=0.75
+    )
+    group_preds = (group_probs >= use_threshold).astype(float)
+    for idx in locked_test_preds.dropna().index:
+        group_preds[int(idx)] = locked_test_preds[idx]
 
-    sub_raw = sample_submission.copy()
-    sub_raw[CFG.target] = (use_probs >= 0.5).astype(bool)
-    sub_raw.to_csv('submission_no_group.csv', index=False)
-    raw_rate = sub_raw['Transported'].mean()
-    print(f'   Raw model positive rate (no group): {raw_rate:.5f}')
-    print(f'   Group-adjusted positive rate: {final_preds.mean():.5f}')
+    sub_group = sample_submission.copy()
+    sub_group[CFG.target] = group_preds.astype(bool)
+    sub_group.to_csv(CFG.submission_file, index=False)
+
+    print(f'\n[OK] Submissions created:')
+    print(f'   submission_no_group.csv     (no group consistency)')
+    print(f'   {CFG.submission_file}       (with group consistency)')
+    print(f'   Positive rate (no group) : {final_preds.mean():.5f}')
+    print(f'   Positive rate (w/ group) : {group_preds.mean():.5f}')
+    print(f'   Hard-rule locked  : {n_locked}')
+    print(f'   Group-adjusted    : {n_group_adjusted}')
+    print(f'   Pre-calibration   : {pre_cal_acc:.5f}')
+    print(f'   Post-calibration  : {cal_acc:.5f}')
+    print(f'   Winner            : {best_final_label}')
 
 
 if __name__ == '__main__':
